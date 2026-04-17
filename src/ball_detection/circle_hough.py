@@ -5,21 +5,6 @@ Detects the football by finding circular shapes in edge-detected images.
 Uses gradient versor (normalised gradient direction) instead of gradient
 magnitude, so the detector finds the most COMPLETE circle rather than
 the most CONTRASTED one.
-
-This prevents false detections on high-contrast non-ball objects like
-the "O" in "SONY" on advertising boards (D'Orazio Figure 2).
-
-Key equations from D'Orazio et al. (2002):
-    Gradient versor (eq. 3):
-        e_vec(x,y) = [Ex/|E|, Ey/|E|]
-
-    Kernel vector normalised by distance (eq. 4):
-        O_vec(x,y) = [cos(atan(y/x))/sqrt(x²+y²), sin(atan(y/x))/sqrt(x²+y²)]
-
-    Detection operator (eq. 1):
-        u(x,y) = integral of e_vec . O_vec / (2*pi*(R_max - R_min))
-
-Reference: D'Orazio, Ancona, Cicirelli, Nitti (2002) IEEE ICPR
 """
 
 import numpy as np

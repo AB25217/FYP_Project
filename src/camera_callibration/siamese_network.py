@@ -5,7 +5,7 @@ Learns compact 16-dimensional feature descriptors from synthetic edge images.
 Pairs of edge images with similar camera poses are trained to have similar
 features, while pairs with dissimilar poses are pushed apart.
 
-Architecture (from Chen & Little 2019):
+Architecture :
     - 5 stride-2 convolutions (kernel sizes: 7, 5, 3, 3, 3)
     - Channels: 1 -> 16 -> 32 -> 64 -> 128 -> 256
     - Final 6x10 convolution to collapse spatial dimensions
@@ -18,7 +18,6 @@ Training:
     - Loss: contrastive loss
     - Similar if: pan diff < 1°, tilt diff < 0.5°, focal diff < 30px
 
-Reference: Chen & Little (2019) "Sports Camera Calibration via Synthetic Data"
 """
 
 import torch

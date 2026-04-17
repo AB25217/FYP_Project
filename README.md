@@ -1,4 +1,4 @@
-# FYP_Project# ⚽ Football Analytics Pipeline — Amateur Match Analysis with Formation Detection
+# Analysis of match footage using computer vision techniques — Match Analysis with Formation Detection
 
 An end-to-end computer vision pipeline that processes broadcast football video to detect players, track positions, identify teams, project positions onto a 2D pitch, and classify team formations — all trained from scratch with no pretrained models.
 
@@ -8,7 +8,7 @@ An end-to-end computer vision pipeline that processes broadcast football video t
 
 ## Overview
 
-This project builds a complete football analytics system accessible to amateur clubs who cannot afford commercial tracking systems (Opta, StatsBomb, Hawk-Eye). Given a standard broadcast video, the pipeline:
+This project builds a complete football analytics system accessible to amateur clubs who cannot afford commercial tracking systems (Opta, StatsBomb, Hawk-Eye) and to further test out capabilities in match footage analysis using computer vision techniques. Given a standard broadcast video, the pipeline:
 
 1. **Detects the pitch** and estimates the camera pose
 2. **Detects and tracks** players and the ball frame-by-frame
@@ -18,75 +18,20 @@ This project builds a complete football analytics system accessible to amateur c
 
 The system achieves this using only a single broadcast camera feed, with all models trained from scratch on publicly available datasets.
 
----
-
-## Pipeline Architecture
-
-```
-Video Frame
-    │
-    ├──→ Court Detection (HSV grass segmentation + Canny edges)
-    │        │
-    │        └──→ Camera Calibration (Siamese network → pose database → ECC refinement)
-    │
-    ├──→ Player Detection (HOG + SVM sliding window)
-    │        │
-    │        └──→ Player Tracking (Lucas-Kanade optical flow)
-    │
-    ├──→ Ball Detection (modified Circle Hough Transform)
-    │
-    └──→ Team Clustering (HSV histograms + K-means)
-             │
-             └──→ Perspective Transform (homography → pitch coordinates)
-                      │
-                      ├──→ Formation Detection (line clustering + template matching)
-                      │
-                      └──→ Visualisation (Streamlit app with pitch minimap)
-```
-
----
 
 ## Modules
 
 | Module | Method | Training | Reference |
 |--------|--------|----------|-----------|
-| Court Detection | HSV thresholding + Hough Lines | No | Mavrogiannis (2022) |
-| Camera Calibration | Siamese CNN + U-Net + ECC | Yes — Colab GPU | Chen & Little (2019) |
-| Player Detection | HOG + SVM | Yes — CPU | Dalal & Triggs (2005) |
-| Ball Detection | Modified Circle Hough Transform | No | D'Orazio et al. (2002) |
-| Object Tracking | Pyramidal Lucas-Kanade | No | Bouguet (2001) |
-| Team Clustering | HSV histograms + K-means | No | Mavrogiannis (2022) |
-| Perspective Transform | Homography projection | No | Mavrogiannis (2022) |
-| **Formation Detection** | **K-means lines + Hungarian matching** | **No** | **Original contribution** |
+| Court Detection | HSV thresholding + Hough Lines | No | 
+| Camera Calibration | Siamese CNN + U-Net + ECC | Yes — Colab GPU |  
+| Player Detection | HOG + SVM | Yes — CPU | Dalal & Triggs (2005) |nsform | No | 
+| Object Tracking | Pyramidal Lucas-Kanade | No |
+| Team Clustering | HSV histograms + K-means | No |
+| Perspective Transform | Homography projection | No |
+| Formation Detection | K-means lines + Hungarian matching| 
 
 ---
-
-## Repository Structure
-
-```
-football-analytics/
-├── src/
-│   ├── court_detection/           # Grass segmentation, edge & line detection
-│   ├── camera_calibration/        # Pitch template, siamese, U-Net, pose DB, ECC
-│   ├── player_detection/          # HOG extractor, SVM classifier, sliding window
-│   ├── ball_detection/            # Circle Hough Transform, semicircle, background sub
-│   ├── tracking/                  # Lucas-Kanade tracker, detection/tracking manager
-│   ├── team_clustering/           # HSV histograms, K-means, team assignment
-│   ├── perspective_transform/     # Homography, pitch projection
-│   ├── formation_detection/       # GK filter, line clustering, template matching
-│   └── pipeline/                  # Video processor, config loader
-├── app/                           # Streamlit visualisation interface
-├── notebooks/                     # Colab training notebooks
-├── configs/                       # paths.yaml, parameter configs
-├── data/                          # README with dataset download instructions
-├── weights/                       # README — trained weights stored on Google Drive
-├── evaluation/                    # Evaluation scripts and results
-└── tests/                         # Unit and integration tests
-```
-
----
-
-## Setup
 
 ### Prerequisites
 
@@ -95,16 +40,10 @@ football-analytics/
 
 ### Installation
 
-```bash
-git clone https://github.com/yourusername/football-analytics.git
-cd football-analytics
-pip install -r requirements.txt
-```
-
 ### Dataset Setup
 
 All datasets are stored on Google Drive due to size constraints:
-[**Google Drive Folder**](https://drive.google.com/drive/folders/17V4eQzGxwpuX09RTAcQAnztrFD7qOwWq)
+[Google Drive Folder](https://drive.google.com/drive/folders/17V4eQzGxwpuX09RTAcQAnztrFD7qOwWq)
 
 See `data/README.md` for full download instructions and folder structure.
 
@@ -114,19 +53,6 @@ See `data/README.md` for full download instructions and folder structure.
 | Roboflow Football | Player/ball detection | [Roboflow Universe](https://universe.roboflow.com/yolo-pw0go/football-and-player) (CC BY 4.0) |
 | ISSIA-CNR | Detection evaluation | [Google Drive](https://drive.google.com/file/d/1Pj6syLRShNQWQaunJmAZttUw2jDh8L_f/view) |
 
-### Training Models (Google Colab)
-
-The pipeline requires three trained models. Training notebooks are in `notebooks/`:
-
-1. **Generate synthetic data** → `notebooks/01_generate_synthetic_data.ipynb`
-2. **Train siamese network** → `notebooks/02_train_siamese.ipynb`
-3. **Build pose database** → `notebooks/03_build_pose_database.ipynb`
-4. **Train U-Net field detector** → `notebooks/04_train_field_detector.ipynb`
-5. **Train HOG+SVM player detector** → `notebooks/02_train_svm_player.ipynb`
-
-Trained weights are saved to Google Drive at `FYP_Project/weights/`.
-
----
 
 ## Usage
 
@@ -159,19 +85,7 @@ for frame in results:
 python test_camera_calibration.py
 ```
 
----
-
-## Formation Detection — Original Contribution
-
-No paper in the reviewed literature performs automated formation detection from broadcast footage. This module extends the Mavrogiannis pipeline by adding:
-
-1. **Goalkeeper filtering** — excludes GK by proximity to goal line
-2. **Temporal smoothing** — averages positions over a 30-second rolling window
-3. **Line clustering** — K-means on x-coordinates to find defensive lines, with silhouette score for optimal k selection
-4. **Template matching** — Hungarian algorithm for optimal assignment against 8 formation templates (4-4-2, 4-3-3, 4-2-3-1, 3-5-2, 3-4-3, 4-1-4-1, 5-3-2, 4-5-1)
-5. **Formation change detection** — monitors displacement between time windows
-
----
+--
 
 ## Evaluation Metrics
 
@@ -190,7 +104,7 @@ No paper in the reviewed literature performs automated formation detection from 
 - **No pretrained models** — all components trained from scratch to demonstrate understanding
 - **CPU-friendly detection** — HOG+SVM and CHT run on a laptop without dedicated GPU
 - **Modular design** — each component is independently testable and replaceable
-- **Offline processing** — designed for post-match analysis (3 FPS target, not real-time)
+- **Offline processing** — designed for post-match analysis (3 FPS target, not real-time due to technological constraints)
 
 ---
 
@@ -216,8 +130,7 @@ No paper in the reviewed literature performs automated formation detection from 
 
 ## Acknowledgements
 
-This project was completed as a Final Year Project at the University of Greenwich. The pipeline architecture is based on Mavrogiannis & Maglogiannis (2022), with camera calibration from Chen & Little (2019). Formation detection is an original contribution.
-
+This project was completed as a Final Year Project at the University of Greenwich.
 ---
 
 ## Licence
