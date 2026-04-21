@@ -10,9 +10,17 @@ __pycache__/
 # Jupyter
 .ipynb_checkpoints/
 
-@"
-# Trained model weights — pulled via src/weights/download_weights.py
+# Trained model weights - pulled via src/weights/download_weights.py
 src/weights/*.pth
 src/weights/*.npz
 src/weights/*.pkl
 src/weights/gan_weights/
+
+# Ultralytics auto-downloaded weights (auto-fetched on first use)
+yolov8*.pt
+yolov5*.pt
+yolo11*.pt
+
+# OS
+.DS_Store
+Thumbs.db
