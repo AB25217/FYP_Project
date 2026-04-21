@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from typing import Tuple, Optional, List
 
 # Import from our modules
-from siamese_network import SiameseNetwork, load_trained_model
+from .siamese_network import SiameseNetwork, load_trained_model
 
 
 @dataclass

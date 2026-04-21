@@ -28,7 +28,7 @@ import cv2
 import os
 from dataclasses import dataclass
 from typing import Tuple, Optional
-from pitch_template import PitchTemplate
+from .pitch_template import PitchTemplate
 
 
 @dataclass
