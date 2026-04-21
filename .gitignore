@@ -24,3 +24,6 @@ yolo11*.pt
 # OS
 .DS_Store
 Thumbs.db
+
+# Generated preview outputs from smoke tests
+tools/*_preview/
