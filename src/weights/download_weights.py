@@ -36,19 +36,31 @@ WEIGHTS = {
     # Two-GAN weights go in src/weights/gan_weights/
     GAN_WEIGHTS_DIR / "seg_latest_net_G.pth":   "1L5AqjOW_yun_AYGgoTHb_GcWMkomZIod",
     GAN_WEIGHTS_DIR / "detec_latest_net_G.pth": "14Ghtqi5v48oPmCvIheDBf23QJt_TDIiZ",
+
 }
 
+
+# Test videos go in data/test_videos/
+TEST_VIDEO_DIR = REPO_ROOT / "data" / "test_videos"
+
+TEST_VIDEOS = {
+    TEST_VIDEO_DIR / "psg_newcastle_tactical.mp4": "1yCJ1pNybSvYFy1T_mLih5pZtUd9x0xmo",
+}
 
 def main():
     # Ensure target directories exist
     WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
     GAN_WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
+    TEST_VIDEO_DIR.mkdir(parents=True, exist_ok=True)
 
-    total = len(WEIGHTS)
+    # Combine weights and test videos into one dict for a single download loop
+    all_files = {**WEIGHTS, **TEST_VIDEOS}
+
+    total = len(all_files)
     skipped = 0
     downloaded = 0
 
-    for dest_path, file_id in WEIGHTS.items():
+    for dest_path, file_id in all_files.items():
         if dest_path.exists() and dest_path.stat().st_size > 0:
             print(f"[skip] {dest_path.name} already present ({dest_path.stat().st_size / 1e6:.1f} MB)")
             skipped += 1
@@ -65,7 +77,5 @@ def main():
             sys.exit(1)
 
     print(f"\nDone. {downloaded} downloaded, {skipped} already present, {total} total.")
-
-
 if __name__ == "__main__":
     main()
