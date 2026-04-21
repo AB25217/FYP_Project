@@ -197,6 +197,99 @@ class TacticalPipeline:
 
         return out
 
+    def process_video(
+            self,
+            video_path: str,
+            output_path: str,
+            max_frames: int = None,
+            start_frame: int = 0,
+            progress_interval: int = 10,
+        ) -> int:
+            """Process a video and write an annotated output video.
+
+            Args:
+                video_path: input video path
+                output_path: output video path (.mp4 recommended)
+                max_frames: stop after this many frames (None = process all)
+                start_frame: starting frame index
+                progress_interval: print progress every N frames
+
+            Returns:
+                int: number of frames processed
+            """
+            if not self._initialised:
+                raise RuntimeError("Call initialise_from_video() before process_video()")
+
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                raise FileNotFoundError(video_path)
+
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            in_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            in_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+            # Peek output size by running one dummy render
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+            ret, first_frame = cap.read()
+            if not ret:
+                cap.release()
+                raise RuntimeError(f"Could not read start_frame {start_frame}")
+            dummy_output = FrameOutput(frame_index=start_frame)
+            sample_render = self.render(first_frame, dummy_output)
+            out_h, out_w = sample_render.shape[:2]
+
+            # Reopen at the start frame so we actually process it
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            writer = cv2.VideoWriter(output_path, fourcc, fps, (out_w, out_h))
+            if not writer.isOpened():
+                cap.release()
+                raise RuntimeError(f"Could not open writer for {output_path}")
+
+            print(f"Processing video:")
+            print(f"  Input:  {video_path} ({in_w}x{in_h} @ {fps:.1f}fps, {total_frames} total frames)")
+            print(f"  Output: {output_path} ({out_w}x{out_h} @ {fps:.1f}fps)")
+            print(f"  Frames: {start_frame} to {start_frame + (max_frames or total_frames)}")
+            print()
+
+            import time
+            t_start = time.time()
+            processed = 0
+            frame_idx = start_frame
+
+            while True:
+                if max_frames is not None and processed >= max_frames:
+                    break
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+                output = self.process_frame(frame, frame_idx)
+                annotated = self.render(frame, output)
+                writer.write(annotated)
+
+                processed += 1
+                frame_idx += 1
+
+                if processed % progress_interval == 0:
+                    elapsed = time.time() - t_start
+                    rate = processed / elapsed if elapsed > 0 else 0
+                    remaining = (max_frames - processed) if max_frames else (total_frames - frame_idx)
+                    eta_sec = remaining / rate if rate > 0 else 0
+                    print(f"  [{processed:5d}/{max_frames or total_frames}] "
+                        f"{rate:.2f} fps | elapsed {elapsed/60:.1f}min | "
+                        f"eta {eta_sec/60:.1f}min")
+
+            cap.release()
+            writer.release()
+
+            elapsed = time.time() - t_start
+            print(f"\nDone. {processed} frames in {elapsed/60:.1f} min "
+                f"({processed/elapsed:.2f} fps average)")
+            return processed
+
     def render(self, frame: np.ndarray, output: FrameOutput) -> np.ndarray:
         vis = frame.copy()
 

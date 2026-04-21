@@ -52,10 +52,10 @@ class GANHomographyEstimator:
         )
 
     def estimate(self, frame: np.ndarray) -> HomographyResult:
-        # Step 1: GAN line detection, resized for siamese input (320x180)
         lines = self.gan.detect_lines(frame, resize_to_input=False)
         lines_320 = cv2.resize(lines, (320, 180))
         _, lines_bin = cv2.threshold(lines_320, 50, 255, cv2.THRESH_BINARY)
+
 
         # Step 2-3: encode + query database
         retrieved = self.db.query(lines_bin, k=1)
@@ -72,6 +72,7 @@ class GANHomographyEstimator:
         # Step 4: render synthetic edge image from retrieved pose
         P_retrieved = self.pose_engine.build_projection_matrix(pose)
         synth_edges = self.pose_engine.render_edge_image(P_retrieved)
+
 
         # Step 5: distance transforms
         dt_query = self._distance_image(lines_bin)

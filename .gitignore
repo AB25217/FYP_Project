@@ -27,3 +27,8 @@ Thumbs.db
 
 # Generated preview outputs from smoke tests
 tools/*_preview/
+
+# Debug images from estimator dev
+tools/debug_*.png
+# Generated video outputs
+tools/video_output/
