@@ -355,18 +355,48 @@ class PoseDatabase:
         db = cls()
         db.device = device
 
-        # Load features and poses
+# Load features and poses
         print(f"Loading database from {database_path}...")
         data = np.load(database_path, allow_pickle=True)
+        keys = set(data.files)
 
         db.features = data["features"]
-        pose_array = data["pose_array"]
-        pose_keys = list(data["pose_keys"])
 
-        db.poses = []
-        for row in pose_array:
-            pose = {k: float(v) for k, v in zip(pose_keys, row)}
-            db.poses.append(pose)
+        # Detect schema — two formats are supported:
+        #   (a) Repo format:       features + pose_array + pose_keys (7 pose dims)
+        #   (b) Notebook format:   features + pans + tilts + focals  (3 pose dims)
+        if "pose_array" in keys and "pose_keys" in keys:
+            # Repo format — full 7-dim poses
+            pose_array = data["pose_array"]
+            pose_keys = list(data["pose_keys"])
+            db.poses = []
+            for row in pose_array:
+                pose = {k: float(v) for k, v in zip(pose_keys, row)}
+                db.poses.append(pose)
+        elif all(k in keys for k in ("pans", "tilts", "focals")):
+            # Notebook format — only 3 pose dims saved
+            # Fill cx/cy/cz/roll with the prior means used during training
+            # (from CameraPoseEngine defaults: World Cup 2014 camera distribution)
+            pans = data["pans"]
+            tilts = data["tilts"]
+            focals = data["focals"]
+            db.poses = []
+            for pan, tilt, focal in zip(pans, tilts, focals):
+                db.poses.append({
+                    "pan": float(pan),
+                    "tilt": float(tilt),
+                    "focal_length": float(focal),
+                    "cx": 52.0,   # World Cup 2014 mean camera x (metres)
+                    "cy": -45.0,  # World Cup 2014 mean camera y (metres)
+                    "cz": 17.0,   # World Cup 2014 mean camera height (metres)
+                    "roll": 0.0,  # roll is negligible in practice
+                })
+            print("  (notebook schema detected — cx/cy/cz/roll filled with training priors)")
+        else:
+            raise KeyError(
+                f"Unrecognised pose_database schema. Keys present: {sorted(keys)}. "
+                f"Expected either ('pose_array' + 'pose_keys') or ('pans' + 'tilts' + 'focals')."
+            )
 
         db.num_entries = len(db.poses)
 

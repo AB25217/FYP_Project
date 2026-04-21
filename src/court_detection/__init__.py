@@ -10,6 +10,6 @@ Modules:
     line_detector.py        — Detect pitch lines using Hough Transform
 """
 
-from .edge_detector import EdgeDetector
+from .edge_detection import EdgeDetector
 from .grass_segmentation import GrassSegmenter
 from .line_detector import LineDetector

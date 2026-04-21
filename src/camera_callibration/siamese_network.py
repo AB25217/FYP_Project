@@ -487,6 +487,10 @@ def load_trained_model(
     """
     Load a trained siamese network from a checkpoint file.
 
+    Accepts two checkpoint formats:
+      1. Wrapped dict:   {"model_state_dict": ..., "epoch": ..., "loss": ...}
+      2. Bare state_dict: OrderedDict of tensors (what torch.save(model.state_dict(), ...) produces)
+
     Args:
         model_path: path to the .pth checkpoint file
         feature_dim: must match the dimension used during training
@@ -500,21 +504,29 @@ def load_trained_model(
 
     checkpoint = torch.load(model_path, map_location=device)
 
-    # Use feature_dim from checkpoint if available
-    if "feature_dim" in checkpoint:
-        feature_dim = checkpoint["feature_dim"]
+    # Detect checkpoint format
+    if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+        # Wrapped format
+        state_dict = checkpoint["model_state_dict"]
+        if "feature_dim" in checkpoint:
+            feature_dim = checkpoint["feature_dim"]
+        epoch = checkpoint.get("epoch", "?")
+        loss = checkpoint.get("loss", None)
+    else:
+        # Bare state_dict (what torch.save(model.state_dict(), ...) produces)
+        state_dict = checkpoint
+        epoch = "?"
+        loss = None
 
     model = SiameseNetwork(feature_dim=feature_dim)
-    model.load_state_dict(checkpoint["model_state_dict"])
+    model.load_state_dict(state_dict)
     model = model.to(device)
     model.eval()
 
-    print(f"Loaded model from {model_path} "
-          f"(epoch {checkpoint.get('epoch', '?')}, "
-          f"loss {checkpoint.get('loss', '?'):.4f})")
+    loss_str = f"{loss:.4f}" if isinstance(loss, (int, float)) else "?"
+    print(f"Loaded model from {model_path} (epoch {epoch}, loss {loss_str})")
 
     return model
-
 
 if __name__ == "__main__":
     print("=== Siamese Network Test ===\n")
