@@ -1,0 +1,21 @@
+﻿# NOTICE — two-GAN field detection model
+
+This folder contains code vendored from:
+  https://github.com/lood339/pytorch-two-GAN
+
+Specifically a fork preserved at:
+  https://github.com/AB25217/pytorch-two-GAN
+
+Original paper:
+  Chen, J. & Little, J.J. (2019)
+  "Sports Camera Calibration via Synthetic Data"
+  CVPR Workshops. arXiv:1810.10658
+
+Files vendored:
+  - networks.py (UnetGenerator + define_G — used for inference)
+
+Only the inference-time components are vendored. Training-time utilities
+(visualizer, options, dataset loaders) are not included because they are
+not used by this project.
+
+Original license (BSD) preserved verbatim in LICENSE.
