@@ -99,9 +99,8 @@ class TacticalAssigner:
         self._colours = display_colours
         return ClusterLabels(labels=semantic_labels, display_colours=display_colours)
 
-    # ------------------------------------------------------------------
     # Assignment strategies
-    # ------------------------------------------------------------------
+    
 
     def _assign_by_pitch_position(
         self,
@@ -218,9 +217,8 @@ class TacticalAssigner:
                 out[gk_id] = "gk_b"; gk_b_assigned = True
         return out
 
-    # ------------------------------------------------------------------
     # Display-colour derivation
-    # ------------------------------------------------------------------
+
 
     @staticmethod
     def _derive_colours(

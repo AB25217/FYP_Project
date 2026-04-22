@@ -99,9 +99,7 @@ class TacticalPipeline:
 
         self._initialised = False
 
-    # ------------------------------------------------------------------
-    # Initialisation (team clustering)
-    # ------------------------------------------------------------------
+    
 
     def initialise_from_video(
         self,
@@ -189,9 +187,6 @@ class TacticalPipeline:
         self._initialised = True
         print(f"Cluster labels: {self.assigner.labels}")
 
-    # ------------------------------------------------------------------
-    # Per-frame processing (with LK tracking)
-    # ------------------------------------------------------------------
 
     def process_frame(self, frame: np.ndarray, frame_index: int = 0) -> FrameOutput:
         """Process one frame through the full pipeline.
@@ -235,7 +230,7 @@ class TacticalPipeline:
         # uniformly with the detection-frame case.
         out.detections, out.track_ids = self._tracked_to_detections(tracked_objects)
 
-        # --- Team classification ----------------------------------
+        # Team classification 
         # On detection frames: run HSV on each player crop, then predict
         # cluster via KMeans, and memoise cluster_id against the track_id.
         # On tracking frames: skip HSV entirely and inherit cluster_ids
@@ -274,7 +269,7 @@ class TacticalPipeline:
             for cid in out.cluster_ids
         ]
 
-        # --- Homography & pitch projection (every frame) ----------
+        # Homography & pitch projection (every frame) 
         h_result = self.homography_estimator.estimate(frame)
         if h_result.H is not None:
             out.homography = h_result.H
@@ -296,9 +291,8 @@ class TacticalPipeline:
 
         return out
 
-    # ------------------------------------------------------------------
+
     # Video-level processing
-    # ------------------------------------------------------------------
 
     def process_video(
         self,
@@ -394,9 +388,8 @@ class TacticalPipeline:
 
         return processed
 
-    # ------------------------------------------------------------------
     # Rendering
-    # ------------------------------------------------------------------
+    
 
     def render(self, frame: np.ndarray, output: FrameOutput) -> np.ndarray:
         vis = frame.copy()
@@ -469,9 +462,7 @@ class TacticalPipeline:
             cv2.circle(mm, (cx, cy), 5, (255, 255, 255), 1)
         return mm
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
+
 
     @staticmethod
     def _tracked_to_detections(

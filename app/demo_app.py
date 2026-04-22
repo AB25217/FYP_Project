@@ -30,18 +30,16 @@ import streamlit as st
 from src.pipeline.tactical_detector import TacticalPipeline, FrameOutput
 
 
-# ---------------------------------------------------------------------------
+
 # Configuration
-# ---------------------------------------------------------------------------
 
 DEFAULT_YOLO_WEIGHTS = "src/weights/yolo/v12n_best.pt"
 OUTPUT_DIR = REPO_ROOT / "app" / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# ---------------------------------------------------------------------------
 # Cached pipeline construction
-# ---------------------------------------------------------------------------
+
 # Streamlit reruns the script top-to-bottom on every interaction. Without
 # caching we'd reload YOLO + TwoGAN + siamese on every click — ~30 seconds
 # wasted each time. @st.cache_resource memoises the pipeline across reruns.
@@ -52,9 +50,8 @@ def get_pipeline(yolo_weights: str) -> TacticalPipeline:
     return TacticalPipeline(yolo_model=yolo_weights, device="cpu")
 
 
-# ---------------------------------------------------------------------------
 # Pipeline execution with Streamlit progress updates
-# ---------------------------------------------------------------------------
+
 
 def run_init_with_progress(
     pipeline: TacticalPipeline,
@@ -220,9 +217,9 @@ def run_processing_with_progress(
     return processed, elapsed
 
 
-# ---------------------------------------------------------------------------
+
 # Streamlit page
-# ---------------------------------------------------------------------------
+
 
 def main() -> None:
     st.set_page_config(
