@@ -10,12 +10,11 @@ from src.pipeline.tactical_detector import TacticalPipeline
 VIDEO_PATH = "data/test_videos/psg_newcastle_tactical.mp4"
 OUTPUT_PATH = "tools/video_output/tactical_demo.mp4"
 
-INIT_FRAMES = 50           # paper default
-START_FRAME = 3000         # skip past any warm-up at video start
-CLIP_SECONDS = 10          # 10 seconds at 25fps = 250 frames
+INIT_FRAMES = 50           # was 10 — better team clustering, takes ~5 min extra
+START_FRAME = 3000         # already what you want
+CLIP_SECONDS = 60          # was 3 — 60 seconds = 1500 frames at 25fps
 FPS = 25
-MAX_FRAMES = CLIP_SECONDS * FPS
-
+MAX_FRAMES = CLIP_SECONDS * FPS     # ← this line is missing
 
 def main():
     Path(OUTPUT_PATH).parent.mkdir(parents=True, exist_ok=True)

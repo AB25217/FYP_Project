@@ -1,13 +1,20 @@
-
-"""tactical_detector.py — Full pipeline orchestrator for tactical-camera footage.
+"""tactical_detector.py - Full pipeline orchestrator for tactical-camera footage.
 
 Stages:
-    1. YOLO tiled detection
-    2. GAN segmentation filter (keep only on-pitch detections)
-    3. Team clustering via HSV histogram + KMeans (k=5, 50-frame init)
-    4. GAN-based homography estimation per frame
-    5. Project foot positions to pitch coordinates
-    6. Render annotated frame with bounding boxes + minimap
+    1. YOLO detection (every N frames)
+    2. Lucas-Kanade optical flow tracking (between detection frames)
+    3. GAN segmentation filter (keep only on-pitch detections)
+    4. Team clustering via HSV histogram + KMeans (k=5, 50-frame init)
+    5. GAN-based homography estimation per frame
+    6. Project foot positions to pitch coordinates
+    7. Render annotated frame with bounding boxes + minimap
+
+The detection/tracking alternation follows Mavrogiannis and Maglogiannis (2022):
+expensive YOLO detection runs every `detect_interval` frames; Lucas-Kanade
+optical flow tracks box centroids in the intervening frames. This (a) cuts
+per-frame compute roughly in half and (b) gives players and the ball
+persistent track IDs, which lets downstream components (team classification,
+minimap) reason about objects over time instead of frame-by-frame.
 """
 from __future__ import annotations
 
@@ -23,16 +30,20 @@ from src.team_clustering.hsv_histogram import HSVFeatureExtractor
 from src.team_clustering.kmeans_clustering import TeamClusterer
 from src.team_clustering.tactical_assigner import TacticalAssigner
 from src.camera_callibration.gan_homography_estimator import GANHomographyEstimator
+from src.tracking.detection_tracker import DetectionTracker
+from src.tracking.lucas_kanade import TrackedObject
 
 
 @dataclass
 class FrameOutput:
     frame_index: int
     detections: List[Detection] = field(default_factory=list)
+    track_ids: List[int] = field(default_factory=list)          # Persistent IDs from LK tracker
     cluster_ids: List[int] = field(default_factory=list)
     team_labels: List[str] = field(default_factory=list)
     pitch_positions: List[Optional[Tuple[float, float]]] = field(default_factory=list)
     homography: Optional[np.ndarray] = None
+    is_detection_frame: bool = True                             # True = YOLO ran; False = LK only
 
 
 class TacticalPipeline:
@@ -41,15 +52,17 @@ class TacticalPipeline:
 
     def __init__(
         self,
-        yolo_model: str = "yolov8s.pt",
+        yolo_model: str = "src/weights/yolo/v12n_best.pt",
         seg_weights: str = "src/weights/gan_weights/seg_latest_net_G.pth",
         det_weights: str = "src/weights/gan_weights/detec_latest_net_G.pth",
         siamese_weights: str = "src/weights/siamese.pth",
         pose_database: str = "src/weights/pose_database.npz",
         device: str = "cpu",
+        detect_interval: int = 2,           # Mavrogiannis default: detect every 2 frames
+        tracker_max_lost_frames: int = 5,   # Remove LK tracks lost for > this many frames
     ):
         print("Loading YOLO...")
-        self.yolo = YOLODetector(model_name=yolo_model, device=device)
+        self.yolo = YOLODetector(model_name=yolo_model, device=device, tiled=False)
         print("Loading two-GAN...")
         self.gan = TwoGANFieldDetector(
             seg_weights=seg_weights, det_weights=det_weights, device=device,
@@ -63,11 +76,32 @@ class TacticalPipeline:
         )
         self.hsv = HSVFeatureExtractor(
             h_bins=36, s_bins=20, v_bins=20,
-            use_upper_body=True, upper_body_ratio=0.6,
+            use_upper_body=True, upper_body_ratio=0.4,
+            min_non_grass_pixels=10,
         )
         self.clusterer = TeamClusterer(n_clusters=5)
         self.assigner = TacticalAssigner()
+
+        # Lucas-Kanade tracker (Mavrogiannis-style). detect_interval=2 means
+        # detection runs every 2nd frame; LK fills the gap on the other frames.
+        print(f"Loading LK tracker (detect_interval={detect_interval})...")
+        self.tracker = DetectionTracker(
+            detect_interval=detect_interval,
+            iou_match_threshold=0.3,
+            max_lost_frames=tracker_max_lost_frames,
+        )
+
+        # Per-track team assignment memo: {track_id: cluster_id}
+        # Once a track has been team-classified via HSV on a high-confidence frame,
+        # we store its cluster_id and reuse it for subsequent frames. This is the
+        # "label propagation" that fixes the 'unknown' labels on distant players.
+        self._track_cluster_memo: dict[int, int] = {}
+
         self._initialised = False
+
+    # ------------------------------------------------------------------
+    # Initialisation (team clustering)
+    # ------------------------------------------------------------------
 
     def initialise_from_video(
         self,
@@ -75,6 +109,11 @@ class TacticalPipeline:
         init_frames: int = 50,
         frame_stride: int = 1,
     ) -> None:
+        """Fit team clustering on the first `init_frames` usable frames.
+
+        Tracker is NOT initialised here - it's reset before process_video()
+        starts. Init only builds the HSV->cluster colour model.
+        """
         print(f"Initialising team clustering from first {init_frames} frames of {video_path}")
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -150,156 +189,230 @@ class TacticalPipeline:
         self._initialised = True
         print(f"Cluster labels: {self.assigner.labels}")
 
+    # ------------------------------------------------------------------
+    # Per-frame processing (with LK tracking)
+    # ------------------------------------------------------------------
+
     def process_frame(self, frame: np.ndarray, frame_index: int = 0) -> FrameOutput:
+        """Process one frame through the full pipeline.
+
+        Alternates between detection frames (YOLO + mask + HSV team classify)
+        and tracking frames (LK optical flow propagation). On tracking frames
+        team labels are inherited from the tracked object's persistent ID via
+        self._track_cluster_memo.
+        """
         if not self._initialised:
             raise RuntimeError("Call initialise_from_video() before process_frame()")
 
         out = FrameOutput(frame_index=frame_index)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        is_det_frame = self.tracker.is_detection_frame(frame_index)
+        out.is_detection_frame = is_det_frame
 
-        all_detections = self.yolo.detect(frame)
-        seg_mask = self.gan.segment(frame)
-        on_pitch_dets = self._filter_by_mask(all_detections, seg_mask)
-        out.detections = on_pitch_dets
+        if is_det_frame:
+            # --- YOLO detection path ----------------------------------
+            all_detections = self.yolo.detect(frame)
+            seg_mask = self.gan.segment(frame)
+            on_pitch_dets = self._filter_by_mask(all_detections, seg_mask)
+            bboxes = [d.bbox for d in on_pitch_dets]
 
-        bboxes = [d.bbox for d in on_pitch_dets]
-        if bboxes:
+            # Feed detections to the tracker. This matches new detections to
+            # existing tracks via IoU, updates track positions, and assigns
+            # persistent IDs. All players get label="player" - we classify
+            # teams in a separate step below.
+            labels = ["player"] * len(bboxes)
+            tracker_result = self.tracker.process_detection(
+                gray, bboxes, frame_index, labels,
+            )
+            tracked_objects = tracker_result.tracked_objects
+        else:
+            # --- Tracking-only path (LK propagation) ------------------
+            tracker_result = self.tracker.process_tracking(gray, frame_index)
+            tracked_objects = tracker_result.tracked_objects
+
+        # Convert tracked objects back into Detection-shaped records so the
+        # rest of the pipeline (HSV, homography, minimap) can treat them
+        # uniformly with the detection-frame case.
+        out.detections, out.track_ids = self._tracked_to_detections(tracked_objects)
+
+        # --- Team classification ----------------------------------
+        # On detection frames: run HSV on each player crop, then predict
+        # cluster via KMeans, and memoise cluster_id against the track_id.
+        # On tracking frames: skip HSV entirely and inherit cluster_ids
+        # from the memo using the persistent track_id.
+        if is_det_frame and out.detections:
+            bboxes = [d.bbox for d in out.detections]
             features, valid_idx = self.hsv.extract_from_frame(frame, bboxes)
+            full_ids = [-1] * len(bboxes)
             if features.shape[0] > 0:
-                cluster_ids = self.clusterer.predict(features)
-                full_ids = [-1] * len(bboxes)
+                cluster_ids_predicted = self.clusterer.predict(features)
                 for i, vi in enumerate(valid_idx):
-                    full_ids[vi] = int(cluster_ids[i])
-                out.cluster_ids = full_ids
-                out.team_labels = [
-                    self.assigner.labels.get(cid, "unknown") if cid >= 0 else "unknown"
-                    for cid in full_ids
-                ]
-            else:
-                out.cluster_ids = [-1] * len(bboxes)
-                out.team_labels = ["unknown"] * len(bboxes)
+                    cid = int(cluster_ids_predicted[i])
+                    full_ids[vi] = cid
+                    # Memoise: this track_id is now known to belong to cid
+                    track_id = out.track_ids[vi]
+                    self._track_cluster_memo[track_id] = cid
 
+            # Now also backfill any detection whose HSV failed this frame but
+            # whose track_id has been classified in a previous frame.
+            for i, cid in enumerate(full_ids):
+                if cid < 0:
+                    tid = out.track_ids[i]
+                    if tid in self._track_cluster_memo:
+                        full_ids[i] = self._track_cluster_memo[tid]
+
+            out.cluster_ids = full_ids
+        else:
+            # Tracking-only frame: inherit cluster_ids from the memo
+            out.cluster_ids = [
+                self._track_cluster_memo.get(tid, -1) for tid in out.track_ids
+            ]
+
+        # Labels
+        out.team_labels = [
+            self.assigner.labels.get(cid, "unknown") if cid >= 0 else "unknown"
+            for cid in out.cluster_ids
+        ]
+
+        # --- Homography & pitch projection (every frame) ----------
         h_result = self.homography_estimator.estimate(frame)
         if h_result.H is not None:
             out.homography = h_result.H
             try:
                 H_inv = np.linalg.inv(h_result.H)
-                for d in on_pitch_dets:
+                for d in out.detections:
                     fx, fy = d.foot_position
                     p = H_inv @ np.array([fx, fy, 1.0])
                     if abs(p[2]) < 1e-8:
                         out.pitch_positions.append(None)
                     else:
-                        out.pitch_positions.append((float(p[0] / p[2]), float(p[1] / p[2])))
+                        out.pitch_positions.append(
+                            (float(p[0] / p[2]), float(p[1] / p[2]))
+                        )
             except np.linalg.LinAlgError:
-                out.pitch_positions = [None] * len(on_pitch_dets)
+                out.pitch_positions = [None] * len(out.detections)
         else:
-            out.pitch_positions = [None] * len(on_pitch_dets)
+            out.pitch_positions = [None] * len(out.detections)
 
         return out
 
+    # ------------------------------------------------------------------
+    # Video-level processing
+    # ------------------------------------------------------------------
+
     def process_video(
-            self,
-            video_path: str,
-            output_path: str,
-            max_frames: int = None,
-            start_frame: int = 0,
-            progress_interval: int = 10,
-        ) -> int:
-            """Process a video and write an annotated output video.
+        self,
+        video_path: str,
+        output_path: str,
+        max_frames: int = None,
+        start_frame: int = 0,
+        progress_interval: int = 10,
+    ) -> int:
+        if not self._initialised:
+            raise RuntimeError("Call initialise_from_video() before process_video()")
 
-            Args:
-                video_path: input video path
-                output_path: output video path (.mp4 recommended)
-                max_frames: stop after this many frames (None = process all)
-                start_frame: starting frame index
-                progress_interval: print progress every N frames
+        # Reset tracker state before every run - track IDs from a previous
+        # run are meaningless for a new clip.
+        self.tracker.reset()
+        self._track_cluster_memo.clear()
 
-            Returns:
-                int: number of frames processed
-            """
-            if not self._initialised:
-                raise RuntimeError("Call initialise_from_video() before process_video()")
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise FileNotFoundError(video_path)
 
-            cap = cv2.VideoCapture(video_path)
-            if not cap.isOpened():
-                raise FileNotFoundError(video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        in_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        in_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            in_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            in_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-            # Peek output size by running one dummy render
-            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-            ret, first_frame = cap.read()
-            if not ret:
-                cap.release()
-                raise RuntimeError(f"Could not read start_frame {start_frame}")
-            dummy_output = FrameOutput(frame_index=start_frame)
-            sample_render = self.render(first_frame, dummy_output)
-            out_h, out_w = sample_render.shape[:2]
-
-            # Reopen at the start frame so we actually process it
-            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            writer = cv2.VideoWriter(output_path, fourcc, fps, (out_w, out_h))
-            if not writer.isOpened():
-                cap.release()
-                raise RuntimeError(f"Could not open writer for {output_path}")
-
-            print(f"Processing video:")
-            print(f"  Input:  {video_path} ({in_w}x{in_h} @ {fps:.1f}fps, {total_frames} total frames)")
-            print(f"  Output: {output_path} ({out_w}x{out_h} @ {fps:.1f}fps)")
-            print(f"  Frames: {start_frame} to {start_frame + (max_frames or total_frames)}")
-            print()
-
-            import time
-            t_start = time.time()
-            processed = 0
-            frame_idx = start_frame
-
-            while True:
-                if max_frames is not None and processed >= max_frames:
-                    break
-                ret, frame = cap.read()
-                if not ret:
-                    break
-
-                output = self.process_frame(frame, frame_idx)
-                annotated = self.render(frame, output)
-                writer.write(annotated)
-
-                processed += 1
-                frame_idx += 1
-
-                if processed % progress_interval == 0:
-                    elapsed = time.time() - t_start
-                    rate = processed / elapsed if elapsed > 0 else 0
-                    remaining = (max_frames - processed) if max_frames else (total_frames - frame_idx)
-                    eta_sec = remaining / rate if rate > 0 else 0
-                    print(f"  [{processed:5d}/{max_frames or total_frames}] "
-                        f"{rate:.2f} fps | elapsed {elapsed/60:.1f}min | "
-                        f"eta {eta_sec/60:.1f}min")
-
+        # Peek output size by running one dummy render
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+        ret, first_frame = cap.read()
+        if not ret:
             cap.release()
-            writer.release()
+            raise RuntimeError(f"Could not read start_frame {start_frame}")
+        dummy_output = FrameOutput(frame_index=start_frame)
+        sample_render = self.render(first_frame, dummy_output)
+        out_h, out_w = sample_render.shape[:2]
 
-            elapsed = time.time() - t_start
-            print(f"\nDone. {processed} frames in {elapsed/60:.1f} min "
-                f"({processed/elapsed:.2f} fps average)")
-            return processed
+        # Reopen at the start frame so we actually process it
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
+        fourcc = cv2.VideoWriter_fourcc(*"avc1")
+        writer = cv2.VideoWriter(output_path, fourcc, fps, (out_w, out_h))
+        if not writer.isOpened():
+            cap.release()
+            raise RuntimeError(f"Could not open writer for {output_path}")
+
+        print(f"Processing video:")
+        print(f"  Input:  {video_path} ({in_w}x{in_h} @ {fps:.1f}fps, {total_frames} total frames)")
+        print(f"  Output: {output_path} ({out_w}x{out_h} @ {fps:.1f}fps)")
+        print(f"  Frames: {start_frame} to {start_frame + (max_frames or total_frames)}")
+        print()
+
+        import time
+        t_start = time.time()
+        processed = 0
+        frame_idx = start_frame
+
+        while True:
+            if max_frames is not None and processed >= max_frames:
+                break
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            output = self.process_frame(frame, frame_idx)
+            annotated = self.render(frame, output)
+            writer.write(annotated)
+
+            processed += 1
+            frame_idx += 1
+
+            if processed % progress_interval == 0:
+                elapsed = time.time() - t_start
+                rate = processed / elapsed if elapsed > 0 else 0
+                remaining = (max_frames - processed) if max_frames else (total_frames - frame_idx)
+                eta_sec = remaining / rate if rate > 0 else 0
+                print(f"  [{processed:5d}/{max_frames or total_frames}] "
+                      f"{rate:.2f} fps | elapsed {elapsed/60:.1f}min | "
+                      f"eta {eta_sec/60:.1f}min")
+
+        cap.release()
+        writer.release()
+
+        elapsed = time.time() - t_start
+        print(f"\nDone. {processed} frames in {elapsed/60:.1f} min "
+              f"({processed/elapsed:.2f} fps average)")
+
+        # Report tracking stats
+        stats = self.tracker.get_stats()
+        print(f"\nTracking summary:")
+        print(f"  Unique IDs assigned:  {stats['total_ids_assigned']}")
+        print(f"  Active at end:        {stats['active_tracks']}")
+        print(f"  Lost but not removed: {stats['lost_tracks']}")
+
+        return processed
+
+    # ------------------------------------------------------------------
+    # Rendering
+    # ------------------------------------------------------------------
 
     def render(self, frame: np.ndarray, output: FrameOutput) -> np.ndarray:
         vis = frame.copy()
 
         for i, det in enumerate(output.detections):
             cid = output.cluster_ids[i] if i < len(output.cluster_ids) else -1
-            colour = self.assigner.display_colours.get(cid, (128, 128, 128)) if cid >= 0 else (128, 128, 128)
+            colour = (
+                self.assigner.display_colours.get(cid, (128, 128, 128))
+                if cid >= 0 else (128, 128, 128)
+            )
             x, y, w, h = det.bbox
             cv2.rectangle(vis, (x, y), (x + w, y + h), colour, 2)
             label = output.team_labels[i] if i < len(output.team_labels) else "?"
-            cv2.putText(vis, label, (x, y - 5),
+            track_id = output.track_ids[i] if i < len(output.track_ids) else -1
+            text = f"{label} #{track_id}" if track_id >= 0 else label
+            cv2.putText(vis, text, (x, y - 5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, colour, 1)
 
         minimap = self._render_minimap(output)
@@ -347,11 +460,40 @@ class TacticalPipeline:
             if not (-5 <= px <= self.PITCH_LENGTH + 5 and -5 <= py <= self.PITCH_WIDTH + 5):
                 continue
             cid = output.cluster_ids[i] if i < len(output.cluster_ids) else -1
-            colour = self.assigner.display_colours.get(cid, (128, 128, 128)) if cid >= 0 else (128, 128, 128)
+            colour = (
+                self.assigner.display_colours.get(cid, (128, 128, 128))
+                if cid >= 0 else (128, 128, 128)
+            )
             cx, cy = pitch_to_px(px, py)
             cv2.circle(mm, (cx, cy), 5, colour, -1)
             cv2.circle(mm, (cx, cy), 5, (255, 255, 255), 1)
         return mm
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _tracked_to_detections(
+        tracked: List[TrackedObject],
+    ) -> Tuple[List[Detection], List[int]]:
+        """Convert LK TrackedObject list to Detection-shaped records.
+
+        Returns (detections, track_ids) as parallel lists so downstream
+        components can work with the familiar Detection interface while still
+        having access to the persistent track_id.
+        """
+        dets: List[Detection] = []
+        track_ids: List[int] = []
+        for t in tracked:
+            x, y, w, h = t.bbox
+            dets.append(Detection(
+                x=x, y=y, w=w, h=h,
+                confidence=1.0,            # tracker output; confidence not meaningful here
+                class_name=t.label,
+            ))
+            track_ids.append(t.object_id)
+        return dets, track_ids
 
     @staticmethod
     def _filter_by_mask(

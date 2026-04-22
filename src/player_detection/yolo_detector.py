@@ -61,11 +61,11 @@ class YOLODetector:
         device: str = "cpu",
         conf_threshold: float = 0.25,
         nms_iou_threshold: float = 0.3,
-        tiled: bool = True,
+        tiled: bool = False,
         tile_rows: int = 2,
         tile_cols: int = 3,
         tile_overlap: int = 60,
-        person_class: int = 0,
+        person_class: int = 1,
     ):
         """
         Args:
@@ -152,8 +152,7 @@ class YOLODetector:
         offset_y: int,
     ) -> List[Detection]:
         """Run YOLO on one image/tile and return detections remapped to frame coords."""
-        results = self.model(frame_or_tile, verbose=False, device=self.device)
-
+        results = self.model(frame_or_tile, verbose=False, device=self.device, imgsz=640)
         dets: List[Detection] = []
         for box in results[0].boxes:
             cls_id = int(box.cls[0])
@@ -233,7 +232,7 @@ class YOLODetector:
 if __name__ == "__main__":
     # Smoke test: run tiled and non-tiled on a synthetic frame
     print("Initialising YOLOv8s...")
-    detector = YOLODetector(model_name="yolov8s.pt", device="cpu", tiled=True)
+    detector = YOLODetector(model_name="yolov8s.pt", device="cpu", tiled=False)
 
     # Fake frame: 720p all-grass. Won't have any players, but should at least
     # run without crashing and produce an empty result list.
